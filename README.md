@@ -1,24 +1,20 @@
 # Memory Allocator Project
 
-## Current Status: Week 1-2 Implementation
+A custom memory allocator implementation in C with multiple allocation strategies.
 
-Building a custom memory allocator with multiple strategies:
-1. Buddy Allocator (in progress)
-2. Slab Allocator (next)
-3. Free-list Allocator
+## Features
+- **Buddy Allocator**: Power-of-two block allocation with merging
+- **Slab Allocator**: Fixed-size allocation for object pools
+- **Performance Benchmarking**: Compare against system malloc
+- **Visual Debugging**: Heap visualization and fragmentation analysis
 
-## How to Build and Run:
-
+## Build and Run
 ```bash
 # Clone and build
-git clone <your-repo>
-cd memory-allocator-demo
-
-# Build the project
 make
 
-# Run tests
-make run
+# Run benchmarks
+make test
 
-# Clean build files
-make clean
+# Run with debug output
+make debug && ./allocator_test
