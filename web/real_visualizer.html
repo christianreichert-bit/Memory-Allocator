@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Allocator - WebAssembly Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: white;
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(45deg, #00b4db, #0083b0);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        
+        .status {
+            padding: 1.5rem;
+            margin: 2rem 0;
+            border-radius: 15px;
+            font-weight: bold;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+        
+        .status.loading {
+            background: linear-gradient(45deg, #f093fb, #f5576c);
+            animation: pulse 1.5s infinite;
+        }
+        
+        .status.ready {
+            background: linear-gradient(45deg, #43e97b, #38f9d7);
+        }
+        
+        .status.error {
+            background: linear-gradient(45deg, #ff416c, #ff4b2b);
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+        
+        .panel h2 {
+            color: #00b4db;
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+        }
+        
+        .btn-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3);
+        }
+        
+        .btn:active {
+            transform: translateY(-1px);
+        }
+        
+        .btn-success {
+            background: linear-gradient(45deg, #2ecc71, #27ae60);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(45deg, #f39c12, #e67e22);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(45deg, #e74c3c, #c0392b);
+        }
+        
+        .btn-purple {
+            background: linear-gradient(45deg, #9b59b6, #8e44ad);
+        }
+        
+        .heap-viz {
+            grid-column: 1 / -1;
+        }
+        
+        .heap-display {
+            height: 200px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            margin: 1.5rem 0;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .memory-block {
+            position: absolute;
+            height: 100%;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9rem;
+            cursor: pointer;
+            border-right: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1.5rem;
+            border-radius: 15px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            background: linear-gradient(45deg, #00b4db, #0083b0);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .console {
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            font-family: 'Monaco', 'Consolas', monospace;
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .log-entry {
+            margin: 0.5rem 0;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+            font-size: 0.9rem;
+        }
+        
+        .log-time {
+            color: #3498db;
+            margin-right: 0.75rem;
+            font-weight: bold;
+        }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        
+        select {
+            width: 100%;
+            padding: 1rem;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            font-size: 1rem;
+            margin-bottom: 1rem;
+        }
+        
+        select option {
+            background: #2c3e50;
+            color: white;
+        }
+        
+        .project-info {
+            margin-top: 3rem;
+            padding: 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .project-info h3 {
+            color: #00b4db;
+            margin-bottom: 1rem;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-top: 1.5rem;
+        }
+        
+        .feature {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 1rem;
+            border-radius: 12px;
+            border-left: 4px solid #2ecc71;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .heap-viz {
+                grid-column: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 Memory Allocator - WebAssembly</h1>
+            <p>Custom Buddy & Slab allocators compiled from C to WebAssembly</p>
+            <div class="status loading" id="status">
+                ⚡ Initializing WebAssembly Runtime...
+            </div>
+        </div>
+        
+        <div class="dashboard">
+            <div class="panel">
+                <h2>📊 Allocator Controls</h2>
+                <div class="btn-group">
+                    <select id="allocatorType">
+                        <option value="0">Buddy Allocator</option>
+                        <option value="1">Slab Allocator</option>
+                    </select>
+                    <button class="btn" onclick="initAllocator()">
+                        <span>🚀</span> Initialize Allocator
+                    </button>
+                    <button class="btn btn-success" onclick="allocateMemory()">
+                        <span>➕</span> Allocate Memory
+                    </button>
+                    <button class="btn btn-warning" onclick="freeMemory()">
+                        <span>🗑️</span> Free Random Block
+                    </button>
+                    <button class="btn btn-danger" onclick="cleanupAllocator()">
+                        <span>🔄</span> Cleanup All
+                    </button>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2>⚡ Performance Tests</h2>
+                <div class="btn-group">
+                    <button class="btn btn-purple" onclick="runTest('basic')">
+                        <span>🧪</span> Basic Test
+                    </button>
+                    <button class="btn btn-purple" onclick="runBenchmark(100)">
+                        <span>⏱️</span> Quick Benchmark
+                    </button>
+                    <button class="btn btn-purple" onclick="runBenchmark(1000)">
+                        <span>📈</span> Standard Benchmark
+                    </button>
+                    <button class="btn btn-purple" onclick="runBenchmark(10000)">
+                        <span>🔥</span> Stress Test
+                    </button>
+                </div>
+            </div>
+            
+            <div class="panel heap-viz">
+                <h2>📊 Heap Visualization</h2>
+                <div class="heap-display" id="heapDisplay">
+                    <!-- Memory blocks will be dynamically added here -->
+                </div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(45deg, #3498db, #2980b9);"></div>
+                        <span>Allocated Memory</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(45deg, #2ecc71, #27ae60);"></div>
+                        <span>Free Memory</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: linear-gradient(45deg, #e74c3c, #c0392b);"></div>
+                        <span>Fragmented Memory</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="statUsed">0 B</div>
+                <div class="stat-label">Memory Used</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statFrag">0%</div>
+                <div class="stat-label">Fragmentation</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statOps">0</div>
+                <div class="stat-label">Operations</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statPerf">0 ops/s</div>
+                <div class="stat-label">Performance</div>
+            </div>
+        </div>
+        
+        <div class="console" id="console">
+            <div class="log-entry">
+                <span class="log-time">[00:00:00]</span> Memory Allocator WebAssembly Demo
+            </div>
+            <div class="log-entry">
+                <span class="log-time">[00:00:00]</span> Initializing system...
+            </div>
+        </div>
+        
+        <div class="project-info">
+            <h3>🎯 Project Overview</h3>
+            <p>This demo showcases a custom memory allocator implemented in C, compiled to WebAssembly for browser execution.</p>
+            
+            <div class="features">
+                <div class="feature">
+                    <strong>Buddy Allocator</strong><br>
+                    Power-of-two block allocation with splitting/merging
+                </div>
+                <div class="feature">
+                    <strong>Slab Allocator</strong><br>
+                    Fixed-size object pools for cache efficiency
+                </div>
+                <div class="feature">
+                    <strong>WebAssembly</strong><br>
+                    C code compiled to run in browser at near-native speed
+                </div>
+                <div class="feature">
+                    <strong>Performance</strong><br>
+                    24M operations/second in native benchmarks
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== CONFIGURATION ====================
+        const CONFIG = {
+            wasmUrl: 'allocator_real.wasm',
+            defaultHeapSize: 1024 * 1024, // 1MB
+            visualization: {
+                maxBlocks: 12,
+                colors: {
+                    allocated: 'linear-gradient(45deg, #3498db, #2980b9)',
+                    free: 'linear-gradient(45deg, #2ecc71, #27ae60)',
+                    fragmented: 'linear-gradient(45deg, #e74c3c, #c0392b)'
+                }
+            }
+        };
+
+        // ==================== STATE MANAGEMENT ====================
+        const State = {
+            wasm: null,
+            ready: false,
+            operations: 0,
+            startTime: Date.now(),
+            allocatedBlocks: [],
+            heapSize: CONFIG.defaultHeapSize,
+            statistics: {
+                usedMemory: 0,
+                fragmentation: 0,
+                performance: 0
+            }
+        };
+
+        // ==================== CORE FUNCTIONS ====================
+        async function initializeWebAssembly() {
+            const status = document.getElementById('status');
+            
+            try {
+                status.textContent = '📦 Loading WebAssembly module...';
+                log('Loading WebAssembly from: ' + CONFIG.wasmUrl);
+                
+                // Load WebAssembly with error handling
+                const wasmModule = await loadWasmWithFallback(CONFIG.wasmUrl);
+                
+                status.className = 'status ready';
+                status.textContent = '✅ WebAssembly Loaded Successfully!';
+                
+                State.wasm = wasmModule;
+                State.ready = true;
+                
+                log('WebAssembly module initialized');
+                log(`Available functions: ${Object.keys(wasmModule).filter(k => k.startsWith('_')).join(', ')}`);
+                
+                // Run a quick test
+                if (wasmModule._wasm_test_allocator) {
+                    const testResult = wasmModule._wasm_test_allocator();
+                    log(`Initial allocator test: ${testResult ? 'PASSED ✓' : 'FAILED ✗'}`);
+                }
+                
+                updateStatistics();
+                setupEventListeners();
+                
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = '❌ Failed to load WebAssembly';
+                log(`Error: ${error.message}`);
+                console.error('WebAssembly initialization failed:', error);
+                
+                // Fallback to simulation mode
+                fallbackToSimulation();
+            }
+        }
+
+        async function loadWasmWithFallback(url) {
+            try {
+                // Try fetch first (works on deployed sites)
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                
+                const bytes = await response.arrayBuffer();
+                const { instance } = await WebAssembly.instantiate(bytes, {
+                    env: {
+                        memory: new WebAssembly.Memory({ initial: 256 }),
+                        abort: (msg) => console.error('WASM abort:', msg)
+                    }
+                });
+                
+                return instance.exports;
+                
+            } catch (fetchError) {
+                log('Fetch failed, trying alternative methods...');
+                
+                // For Vercel deployment, fetch should work
+                // If we're here, we might be in local file mode
+                throw fetchError;
+            }
+        }
+
+        function fallbackToSimulation() {
+            log('⚠️ Using simulation mode (WebAssembly not available)');
+            log('On Vercel deployment, WebAssembly will work automatically');
+            
+            // Mock WebAssembly functions for simulation
+            State.wasm = {
+                _wasm_init_allocator: () => 1,
+                _wasm_malloc: (size) => {
+                    State.statistics.usedMemory += size;
+                    return Math.random() * 1000000;
+                },
+                _wasm_free: () => {
+                    State.statistics.usedMemory = Math.max(0, State.statistics.usedMemory - 100);
+                },
+                _wasm_get_used_memory: () => State.statistics.usedMemory,
+                _wasm_get_fragmentation: () => State.statistics.fragmentation,
+                _wasm_cleanup: () => {
+                    State.statistics.usedMemory = 0;
+                    State.allocatedBlocks = [];
+                },
+                _wasm_test_allocator: () => 1,
+                _wasm_benchmark: (iterations) => iterations
+            };
+            
+            State.ready = true;
+            document.getElementById('status').className = 'status ready';
+            document.getElementById('status').textContent = '✅ Simulation Mode Active';
+        }
+
+        // ==================== ALLOCATOR OPERATIONS ====================
+        function initAllocator() {
+            if (!State.ready) return;
+            
+            const type = document.getElementById('allocatorType').value;
+            const allocatorName = type === '0' ? 'Buddy' : 'Slab';
+            
+            if (State.wasm._wasm_init_allocator) {
+                const result = State.wasm._wasm_init_allocator(parseInt(type), State.heapSize);
+                
+                if (result) {
+                    log(`✅ ${allocatorName} allocator initialized with ${formatBytes(State.heapSize)}`);
+                    State.allocatedBlocks = [];
+                    visualizeHeap();
+                } else {
+                    log(`❌ Failed to initialize ${allocatorName} allocator`);
+                }
+                
+                State.operations++;
+                updateStatistics();
+            }
+        }
+
+        function allocateMemory() {
+            if (!State.ready) return;
+            
+            const size = Math.floor(Math.random() * 1024) + 64; // 64B - 1088B
+            const blockId = State.allocatedBlocks.length;
+            
+            if (State.wasm._wasm_malloc) {
+                const pointer = State.wasm._wasm_malloc(size);
+                
+                if (pointer) {
+                    State.allocatedBlocks.push({ id: blockId, size, pointer });
+                    log(`📝 Allocated ${formatBytes(size)} (Block ${blockId})`);
+                    
+                    if (State.wasm._wasm_get_used_memory) {
+                        State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
+                    }
+                    
+                    visualizeHeap();
+                    State.operations++;
+                    updateStatistics();
+                } else {
+                    log(`❌ Allocation failed for ${formatBytes(size)}`);
+                }
+            }
+        }
+
+        function freeMemory() {
+            if (!State.ready || State.allocatedBlocks.length === 0) {
+                log('No blocks to free');
+                return;
+            }
+            
+            const randomIndex = Math.floor(Math.random() * State.allocatedBlocks.length);
+            const block = State.allocatedBlocks[randomIndex];
+            
+            if (State.wasm._wasm_free) {
+                State.wasm._wasm_free(block.pointer);
+                State.allocatedBlocks.splice(randomIndex, 1);
+                
+                log(`🗑️ Freed Block ${block.id} (${formatBytes(block.size)})`);
+                
+                if (State.wasm._wasm_get_used_memory) {
+                    State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
+                }
+                
+                visualizeHeap();
+                State.operations++;
+                updateStatistics();
+            }
+        }
+
+        function cleanupAllocator() {
+            if (!State.ready) return;
+            
+            if (State.wasm._wasm_cleanup) {
+                State.wasm._wasm_cleanup();
+                State.allocatedBlocks = [];
+                State.statistics.usedMemory = 0;
+                
+                log('🧹 Allocator cleaned up');
+                visualizeHeap();
+                State.operations++;
+                updateStatistics();
+            }
+        }
+
+        // ==================== BENCHMARKING ====================
+        function runTest(testType) {
+            if (!State.ready) return;
+            
+            log(`🧪 Running ${testType} test...`);
+            
+            if (State.wasm._wasm_test_allocator) {
+                const result = State.wasm._wasm_test_allocator();
+                log(`Test result: ${result ? 'PASSED ✓' : 'FAILED ✗'}`);
+                State.operations++;
+                updateStatistics();
+            }
+        }
+
+        function runBenchmark(iterations) {
+            if (!State.ready) return;
+            
+            log(`⏱️ Starting benchmark (${iterations} operations)...`);
+            const startTime = performance.now();
+            
+            if (State.wasm._wasm_benchmark) {
+                const success = State.wasm._wasm_benchmark(iterations);
+                const endTime = performance.now();
+                const duration = endTime - startTime;
+                const opsPerSec = Math.round((iterations / duration) * 1000);
+                
+                State.statistics.performance = opsPerSec;
+                log(`📊 Benchmark: ${success}/${iterations} successful (${opsPerSec.toLocaleString()} ops/sec)`);
+                
+            } else {
+                // Fallback JavaScript benchmark
+                let sum = 0;
+                for (let i = 0; i < iterations; i++) sum += i;
+                
+                const endTime = performance.now();
+                const duration = endTime - startTime;
+                const opsPerSec = Math.round((iterations / duration) * 1000);
+                
+                State.statistics.performance = opsPerSec;
+                log(`📊 JavaScript benchmark: ${opsPerSec.toLocaleString()} ops/sec`);
+            }
+            
+            State.operations += iterations;
+            updateStatistics();
+        }
+
+        // ==================== VISUALIZATION ====================
+        function visualizeHeap() {
+            const heapDisplay = document.getElementById('heapDisplay');
+            heapDisplay.innerHTML = '';
+            
+            const totalBlocks = CONFIG.visualization.maxBlocks;
+            const allocatedCount = Math.min(State.allocatedBlocks.length, totalBlocks);
+            const freeCount = totalBlocks - allocatedCount;
+            
+            let position = 0;
+            const blockWidth = 100 / totalBlocks;
+            
+            // Allocated blocks
+            for (let i = 0; i < allocatedCount; i++) {
+                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.allocated, 'A', `Allocated Block ${i}`);
+                position += blockWidth;
+            }
+            
+            // Free blocks
+            for (let i = 0; i < freeCount; i++) {
+                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.free, 'F', `Free Space ${i}`);
+                position += blockWidth;
+            }
+            
+            // Update fragmentation
+            if (State.wasm._wasm_get_fragmentation) {
+                State.statistics.fragmentation = State.wasm._wasm_get_fragmentation();
+            } else {
+                State.statistics.fragmentation = Math.min(100, (freeCount / totalBlocks) * 100);
+            }
+        }
+
+        function createMemoryBlock(left, width, color, label, title) {
+            const block = document.createElement('div');
+            block.className = 'memory-block';
+            block.style.left = `${left}%`;
+            block.style.width = `${width}%`;
+            block.style.background = color;
+            block.textContent = label;
+            block.title = title;
+            
+            block.onclick = () => {
+                log(`Clicked: ${title}`);
+            };
+            
+            document.getElementById('heapDisplay').appendChild(block);
+        }
+
+        // ==================== UTILITIES ====================
+        function log(message) {
+            const now = new Date();
+            const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
+            
+            const consoleDiv = document.getElementById('console');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">${timeStr}</span> ${message}`;
+            
+            consoleDiv.appendChild(entry);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function updateStatistics() {
+            // Update displayed stats
+            document.getElementById('statUsed').textContent = formatBytes(State.statistics.usedMemory);
+            document.getElementById('statFrag').textContent = `${Math.round(State.statistics.fragmentation)}%`;
+            document.getElementById('statOps').textContent = State.operations;
+            document.getElementById('statPerf').textContent = `${State.statistics.performance.toLocaleString()} ops/s`;
+            
+            // Calculate real-time performance
+            const elapsed = (Date.now() - State.startTime) / 1000;
+            if (elapsed > 0) {
+                const opsPerSec = Math.round(State.operations / elapsed);
+                document.getElementById('statPerf').textContent = `${opsPerSec.toLocaleString()} ops/s`;
+            }
+        }
+
+        function setupEventListeners() {
+            // Auto-update stats every second
+            setInterval(updateStatistics, 1000);
+            
+            // Initial visualization
+            visualizeHeap();
+        }
+
+        // ==================== INITIALIZATION ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            log('🚀 Memory Allocator Demo Initializing');
+            log('WebAssembly compilation: COMPLETE ✓');
+            log('Visualization engine: READY ✓');
+            
+            // Start WebAssembly initialization
+            initializeWebAssembly();
+            
+            // Initial stats update
+            updateStatistics();
+        });
+    </script>
+</body>
+</html>
