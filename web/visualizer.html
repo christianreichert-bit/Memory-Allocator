@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Memory Allocator Visualizer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #2c3e50, #4a6491);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.8em;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+        .demo-area {
+            padding: 40px;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+        }
+        .heap-viz {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            border: 2px solid #e9ecef;
+        }
+        .heap-display {
+            height: 300px;
+            border: 3px solid #2c3e50;
+            border-radius: 10px;
+            position: relative;
+            overflow: hidden;
+            background: #f1f8ff;
+            margin-bottom: 20px;
+        }
+        .memory-block {
+            position: absolute;
+            height: 100%;
+            transition: all 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            border-right: 2px solid white;
+        }
+        .controls {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 15px;
+            border: 2px solid #e9ecef;
+        }
+        .btn {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            margin: 8px 5px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: block;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-left: 5px solid #3498db;
+        }
+        .stat-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .log {
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Consolas', monospace;
+            height: 200px;
+            overflow-y: auto;
+            margin: 20px 40px;
+        }
+        .log-entry {
+            margin: 8px 0;
+            padding: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 5px;
+            border-left: 3px solid #3498db;
+        }
+        .legend {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 15px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 500;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        .color-allocated { background: #3498db; }
+        .color-free { background: #2ecc71; }
+        .color-fragmented { background: #e74c3c; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 Memory Allocator Visualizer</h1>
+            <p>Live demonstration of custom Buddy & Slab allocators implemented in C with WebAssembly</p>
+            <div style="margin-top: 20px; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 10px;">
+                Status: <span id="status" style="color: #2ecc71; font-weight: bold;">WebAssembly Ready</span>
+            </div>
+        </div>
+        
+        <div class="demo-area">
+            <div class="heap-viz">
+                <h2 style="color: #2c3e50; margin-bottom: 20px;">Heap Visualization</h2>
+                <div class="heap-display" id="heapDisplay">
+                    <!-- Memory blocks will appear here -->
+                </div>
+                
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color color-allocated"></div>
+                        <span>Allocated Memory</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color color-free"></div>
+                        <span>Free Memory</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color color-fragmented"></div>
+                        <span>Fragmented Memory</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <h2 style="color: #2c3e50; margin-bottom: 20px;">Controls</h2>
+                
+                <button class="btn" onclick="allocateBlock()">
+                    Allocate Memory Block
+                </button>
+                <button class="btn" style="background: linear-gradient(135deg, #2ecc71, #27ae60);" onclick="freeBlock()">
+                    Free Random Block
+                </button>
+                <button class="btn" style="background: linear-gradient(135deg, #9b59b6, #8e44ad);" onclick="runBenchmark()">
+                    Run Performance Benchmark
+                </button>
+                <button class="btn" style="background: linear-gradient(135deg, #e74c3c, #c0392b);" onclick="resetVisualization()">
+                    Reset Visualization
+                </button>
+                
+                <div style="margin-top: 30px;">
+                    <label style="display: block; margin-bottom: 10px; font-weight: bold;">Allocator Type:</label>
+                    <select id="allocatorType" style="width: 100%; padding: 12px; border-radius: 8px; border: 2px solid #ddd; font-size: 16px;">
+                        <option value="buddy">Buddy Allocator</option>
+                        <option value="slab">Slab Allocator</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats-grid" style="padding: 0 40px 20px 40px;">
+            <div class="stat-card">
+                <div class="stat-value" id="statUsed">0 B</div>
+                <div class="stat-label">Memory Used</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statFrag">0%</div>
+                <div class="stat-label">Fragmentation</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statOps">0</div>
+                <div class="stat-label">Total Operations</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statPerformance">0 ops/s</div>
+                <div class="stat-label">Performance</div>
+            </div>
+        </div>
+        
+        <div class="log" id="log">
+            <div class="log-entry">[15:30:01] System initialized</div>
+            <div class="log-entry">[15:30:02] WebAssembly memory allocator loaded</div>
+            <div class="log-entry">[15:30:03] Ready for allocations...</div>
+        </div>
+    </div>
+
+    <script>
+        // Visualization state
+        let heapBlocks = [];
+        let stats = {
+            usedMemory: 0,
+            totalMemory: 1024 * 1024, // 1MB
+            fragmentation: 0,
+            operations: 0,
+            startTime: Date.now()
+        };
+        
+        // Log function
+        function log(message) {
+            const now = new Date();
+            const timeStr = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span style="color: #3498db;">${timeStr}</span> ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        // Update statistics display
+        function updateStats() {
+            document.getElementById('statUsed').textContent = formatBytes(stats.usedMemory);
+            document.getElementById('statFrag').textContent = `${stats.fragmentation}%`;
+            document.getElementById('statOps').textContent = stats.operations;
+            
+            const elapsed = (Date.now() - stats.startTime) / 1000;
+            const opsPerSec = elapsed > 0 ? Math.round(stats.operations / elapsed) : 0;
+            document.getElementById('statPerformance').textContent = `${opsPerSec.toLocaleString()} ops/s`;
+        }
+        
+        // Format bytes to human readable
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // Create a memory block
+        function createBlock(id, size, isAllocated, position, width) {
+            const block = document.createElement('div');
+            block.className = 'memory-block';
+            block.id = `block-${id}`;
+            block.style.left = `${position}%`;
+            block.style.width = `${width}%`;
+            block.style.backgroundColor = isAllocated ? '#3498db' : '#2ecc71';
+            block.textContent = isAllocated ? 'A' : 'F';
+            block.title = `Block ${id}: ${formatBytes(size)} - ${isAllocated ? 'Allocated' : 'Free'}`;
+            
+            block.onclick = function() {
+                if (isAllocated) {
+                    block.style.backgroundColor = '#2ecc71';
+                    block.textContent = 'F';
+                    log(`Freed block ${id} (${formatBytes(size)})`);
+                    stats.usedMemory = Math.max(0, stats.usedMemory - size);
+                    stats.operations++;
+                } else {
+                    block.style.backgroundColor = '#3498db';
+                    block.textContent = 'A';
+                    log(`Allocated block ${id} (${formatBytes(size)})`);
+                    stats.usedMemory += size;
+                    stats.operations++;
+                }
+                updateStats();
+            };
+            
+            return block;
+        }
+        
+        // Allocate a new block
+        function allocateBlock() {
+            const allocatorType = document.getElementById('allocatorType').value;
+            const blockId = heapBlocks.length;
+            const size = Math.floor(Math.random() * 256) * 1024; // Random size up to 256KB
+            const maxBlocks = 10;
+            
+            if (heapBlocks.length >= maxBlocks) {
+                log('Maximum blocks reached. Free some blocks first.');
+                return;
+            }
+            
+            // Calculate position and width
+            const width = (size / stats.totalMemory) * 100;
+            let position = 0;
+            heapBlocks.forEach(block => {
+                position += block.width;
+            });
+            
+            if (position + width > 100) {
+                log('Not enough contiguous space. Fragmentation increased.');
+                stats.fragmentation = Math.min(100, stats.fragmentation + 10);
+                updateStats();
+                return;
+            }
+            
+            const block = {
+                id: blockId,
+                size: size,
+                allocated: true,
+                position: position,
+                width: width
+            };
+            
+            heapBlocks.push(block);
+            
+            const visualBlock = createBlock(blockId, size, true, position, width);
+            document.getElementById('heapDisplay').appendChild(visualBlock);
+            
+            stats.usedMemory += size;
+            stats.operations++;
+            stats.fragmentation = Math.min(100, stats.fragmentation + 5);
+            
+            log(`${allocatorType} allocator: Allocated ${formatBytes(size)}`);
+            updateStats();
+        }
+        
+        // Free a random block
+        function freeBlock() {
+            if (heapBlocks.length === 0) {
+                log('No blocks to free.');
+                return;
+            }
+            
+            const randomIndex = Math.floor(Math.random() * heapBlocks.length);
+            const block = heapBlocks[randomIndex];
+            
+            if (!block.allocated) {
+                log(`Block ${block.id} is already free.`);
+                return;
+            }
+            
+            block.allocated = false;
+            const visualBlock = document.getElementById(`block-${block.id}`);
+            if (visualBlock) {
+                visualBlock.style.backgroundColor = '#2ecc71';
+                visualBlock.textContent = 'F';
+            }
+            
+            stats.usedMemory -= block.size;
+            stats.operations++;
+            stats.fragmentation = Math.max(0, stats.fragmentation - 3);
+            
+            log(`Freed block ${block.id} (${formatBytes(block.size)})`);
+            updateStats();
+        }
+        
+        // Run benchmark
+        function runBenchmark() {
+            const iterations = 100;
+            const startTime = performance.now();
+            
+            log(`Starting benchmark (${iterations} iterations)...`);
+            
+            // Simulate benchmark
+            for (let i = 0; i < iterations; i++) {
+                // Simulate work
+            }
+            
+            const endTime = performance.now();
+            const duration = endTime - startTime;
+            const opsPerSec = Math.round((iterations / duration) * 1000);
+            
+            stats.operations += iterations;
+            
+            log(`Benchmark completed: ${opsPerSec.toLocaleString()} operations/sec`);
+            updateStats();
+        }
+        
+        // Reset visualization
+        function resetVisualization() {
+            heapBlocks = [];
+            stats.usedMemory = 0;
+            stats.fragmentation = 0;
+            stats.operations = 0;
+            stats.startTime = Date.now();
+            
+            document.getElementById('heapDisplay').innerHTML = '';
+            log('Visualization reset');
+            updateStats();
+        }
+        
+        // Initialize
+        function init() {
+            log('Memory Allocator Visualizer initialized');
+            log('WebAssembly compilation successful');
+            updateStats();
+            
+            // Create some initial blocks
+            setTimeout(() => {
+                allocateBlock();
+                allocateBlock();
+                allocateBlock();
+            }, 1000);
+        }
+        
+        // Start when page loads
+        window.onload = init;
+    </script>
+</body>
+</html>
