@@ -436,10 +436,12 @@
         </div>
     </div>
 
+    <!-- Include Emscripten-generated JS -->
+    <script src="allocator_real.js"></script>
+    
     <script>
         // ==================== CONFIGURATION ====================
         const CONFIG = {
-            wasmUrl: 'allocator_real.wasm',
             defaultHeapSize: 1024 * 1024, // 1MB
             visualization: {
                 maxBlocks: 12,
@@ -466,98 +468,173 @@
             }
         };
 
-        // ==================== CORE FUNCTIONS ====================
+        // ==================== FIXED WEBASSEMBLY LOADING ====================
         async function initializeWebAssembly() {
             const status = document.getElementById('status');
             
             try {
                 status.textContent = '📦 Loading WebAssembly module...';
-                log('Loading WebAssembly from: ' + CONFIG.wasmUrl);
+                log('Loading WebAssembly...');
                 
-                // Load WebAssembly with error handling
-                const wasmModule = await loadWasmWithFallback(CONFIG.wasmUrl);
-                
-                status.className = 'status ready';
-                status.textContent = '✅ WebAssembly Loaded Successfully!';
-                
-                State.wasm = wasmModule;
-                State.ready = true;
-                
-                log('WebAssembly module initialized');
-                log(`Available functions: ${Object.keys(wasmModule).filter(k => k.startsWith('_')).join(', ')}`);
-                
-                // Run a quick test
-                if (wasmModule._wasm_test_allocator) {
-                    const testResult = wasmModule._wasm_test_allocator();
-                    log(`Initial allocator test: ${testResult ? 'PASSED ✓' : 'FAILED ✗'}`);
+                // Method 1: Use Emscripten Module (if available)
+                if (typeof Module !== 'undefined') {
+                    log('Detected Emscripten Module');
+                    
+                    // Wait for Emscripten to initialize
+                    await new Promise((resolve) => {
+                        if (Module.asm) {
+                            resolve();
+                        } else if (Module.onRuntimeInitialized) {
+                            Module.onRuntimeInitialized = resolve;
+                        } else {
+                            // Check every 100ms if module is ready
+                            const check = setInterval(() => {
+                                if (Module.asm) {
+                                    clearInterval(check);
+                                    resolve();
+                                }
+                            }, 100);
+                        }
+                    });
+                    
+                    log('Emscripten runtime initialized');
+                    
+                    // Create wrapper functions from Emscripten
+                    State.wasm = {
+                        _wasm_init_allocator: Module._wasm_init_allocator || Module.cwrap?.('wasm_init_allocator', 'number', ['number', 'number']),
+                        _wasm_malloc: Module._wasm_malloc || Module.cwrap?.('wasm_malloc', 'number', ['number']),
+                        _wasm_free: Module._wasm_free || Module.cwrap?.('wasm_free', 'void', ['number']),
+                        _wasm_get_used_memory: Module._wasm_get_used_memory || Module.cwrap?.('wasm_get_used_memory', 'number', []),
+                        _wasm_get_fragmentation: Module._wasm_get_fragmentation || Module.cwrap?.('wasm_get_fragmentation', 'number', []),
+                        _wasm_cleanup: Module._wasm_cleanup || Module.cwrap?.('wasm_cleanup', 'void', []),
+                        _wasm_test_allocator: Module._wasm_test_allocator || Module.cwrap?.('wasm_test_allocator', 'number', []),
+                        _wasm_benchmark: Module._wasm_benchmark || Module.cwrap?.('wasm_benchmark', 'number', ['number'])
+                    };
+                    
+                    // Verify functions exist
+                    const availableFuncs = Object.keys(State.wasm).filter(k => State.wasm[k] !== undefined && State.wasm[k] !== null);
+                    log(`Available WebAssembly functions: ${availableFuncs.length}`);
+                    
+                    if (availableFuncs.length > 0) {
+                        status.className = 'status ready';
+                        status.textContent = '✅ REAL WebAssembly Loaded!';
+                        State.ready = true;
+                        
+                        log('WebAssembly module initialized successfully');
+                        log('This is REAL C code running in your browser!');
+                        
+                        // Test the allocator
+                        if (State.wasm._wasm_test_allocator) {
+                            const testResult = State.wasm._wasm_test_allocator();
+                            log(`Initial allocator test: ${testResult ? 'PASSED ✓ (Real WASM)' : 'FAILED ✗'}`);
+                        }
+                        
+                        updateStatistics();
+                        setupEventListeners();
+                        return;
+                    }
                 }
                 
-                updateStatistics();
-                setupEventListeners();
+                // Method 2: Direct WASM loading (for non-Emscripten builds)
+                log('Trying direct WASM loading...');
+                const importObject = {
+                    env: {
+                        memory: new WebAssembly.Memory({ initial: 256, maximum: 1024 }),
+                        table: new WebAssembly.Table({ initial: 0, element: 'anyfunc' }),
+                        abort: (msg) => console.error('WASM abort:', msg),
+                        exit: (code) => console.log('WASM exit:', code),
+                        // Memory operations
+                        memcpy: (dest, src, size) => {
+                            const mem8 = new Uint8Array(importObject.env.memory.buffer);
+                            mem8.copyWithin(dest, src, src + size);
+                        },
+                        memset: (ptr, value, size) => {
+                            const mem8 = new Uint8Array(importObject.env.memory.buffer);
+                            mem8.fill(value, ptr, ptr + size);
+                        }
+                    }
+                    // NO wasi_snapshot_preview1 import - this fixes the error!
+                };
+                
+                // Try to load the WASM file
+                try {
+                    const response = await fetch('allocator_real.wasm');
+                    const bytes = await response.arrayBuffer();
+                    const { instance } = await WebAssembly.instantiate(bytes, importObject);
+                    
+                    State.wasm = instance.exports;
+                    State.ready = true;
+                    
+                    status.className = 'status ready';
+                    status.textContent = '✅ Direct WebAssembly Loaded!';
+                    
+                    log('Direct WebAssembly loaded successfully');
+                    log('C functions available: ' + Object.keys(State.wasm).join(', '));
+                    
+                    updateStatistics();
+                    setupEventListeners();
+                    
+                } catch (fetchError) {
+                    throw new Error('Could not load WASM file');
+                }
                 
             } catch (error) {
-                status.className = 'status error';
-                status.textContent = '❌ Failed to load WebAssembly';
-                log(`Error: ${error.message}`);
                 console.error('WebAssembly initialization failed:', error);
+                status.className = 'status error';
+                status.textContent = '❌ WebAssembly Failed - Using Simulation';
+                log(`Error: ${error.message}`);
                 
                 // Fallback to simulation mode
                 fallbackToSimulation();
             }
         }
 
-        async function loadWasmWithFallback(url) {
-            try {
-                // Try fetch first (works on deployed sites)
-                const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                
-                const bytes = await response.arrayBuffer();
-                const { instance } = await WebAssembly.instantiate(bytes, {
-                    env: {
-                        memory: new WebAssembly.Memory({ initial: 256 }),
-                        abort: (msg) => console.error('WASM abort:', msg)
-                    }
-                });
-                
-                return instance.exports;
-                
-            } catch (fetchError) {
-                log('Fetch failed, trying alternative methods...');
-                
-                // For Vercel deployment, fetch should work
-                // If we're here, we might be in local file mode
-                throw fetchError;
-            }
-        }
-
         function fallbackToSimulation() {
             log('⚠️ Using simulation mode (WebAssembly not available)');
-            log('On Vercel deployment, WebAssembly will work automatically');
             
             // Mock WebAssembly functions for simulation
             State.wasm = {
-                _wasm_init_allocator: () => 1,
+                _wasm_init_allocator: () => {
+                    log('SIMULATION: Initialized allocator');
+                    return 1;
+                },
                 _wasm_malloc: (size) => {
                     State.statistics.usedMemory += size;
-                    return Math.random() * 1000000;
+                    const ptr = Math.random() * 1000000;
+                    log(`SIMULATION: Allocated ${formatBytes(size)} at ${Math.round(ptr)}`);
+                    return ptr;
                 },
-                _wasm_free: () => {
+                _wasm_free: (ptr) => {
                     State.statistics.usedMemory = Math.max(0, State.statistics.usedMemory - 100);
+                    log(`SIMULATION: Freed pointer ${Math.round(ptr)}`);
                 },
                 _wasm_get_used_memory: () => State.statistics.usedMemory,
-                _wasm_get_fragmentation: () => State.statistics.fragmentation,
+                _wasm_get_fragmentation: () => {
+                    State.statistics.fragmentation = Math.min(100, (State.allocatedBlocks.length / 12) * 100);
+                    return State.statistics.fragmentation;
+                },
                 _wasm_cleanup: () => {
                     State.statistics.usedMemory = 0;
                     State.allocatedBlocks = [];
+                    log('SIMULATION: Cleaned up allocator');
                 },
-                _wasm_test_allocator: () => 1,
-                _wasm_benchmark: (iterations) => iterations
+                _wasm_test_allocator: () => {
+                    log('SIMULATION: Test passed');
+                    return 1;
+                },
+                _wasm_benchmark: (iterations) => {
+                    const result = Math.floor(iterations * 0.95);
+                    log(`SIMULATION: Benchmark ${iterations} ops, ${result} successful`);
+                    return result;
+                }
             };
             
             State.ready = true;
             document.getElementById('status').className = 'status ready';
             document.getElementById('status').textContent = '✅ Simulation Mode Active';
+            
+            updateStatistics();
+            setupEventListeners();
         }
 
         // ==================== ALLOCATOR OPERATIONS ====================
@@ -594,7 +671,7 @@
                 
                 if (pointer) {
                     State.allocatedBlocks.push({ id: blockId, size, pointer });
-                    log(`📝 Allocated ${formatBytes(size)} (Block ${blockId})`);
+                    log(`📝 Allocated ${formatBytes(size)} (Block ${blockId}) at ${Math.round(pointer)}`);
                     
                     if (State.wasm._wasm_get_used_memory) {
                         State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
@@ -622,7 +699,7 @@
                 State.wasm._wasm_free(block.pointer);
                 State.allocatedBlocks.splice(randomIndex, 1);
                 
-                log(`🗑️ Freed Block ${block.id} (${formatBytes(block.size)})`);
+                log(`🗑️ Freed Block ${block.id} (${formatBytes(block.size)}) at ${Math.round(block.pointer)}`);
                 
                 if (State.wasm._wasm_get_used_memory) {
                     State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
@@ -679,7 +756,7 @@
                 log(`📊 Benchmark: ${success}/${iterations} successful (${opsPerSec.toLocaleString()} ops/sec)`);
                 
             } else {
-                // Fallback JavaScript benchmark
+                // JavaScript benchmark fallback
                 let sum = 0;
                 for (let i = 0; i < iterations; i++) sum += i;
                 
@@ -709,13 +786,16 @@
             
             // Allocated blocks
             for (let i = 0; i < allocatedCount; i++) {
-                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.allocated, 'A', `Allocated Block ${i}`);
+                const block = State.allocatedBlocks[i];
+                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.allocated, 
+                                 'A', `Allocated: ${formatBytes(block.size)}`);
                 position += blockWidth;
             }
             
             // Free blocks
             for (let i = 0; i < freeCount; i++) {
-                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.free, 'F', `Free Space ${i}`);
+                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.free, 
+                                 'F', `Free Space`);
                 position += blockWidth;
             }
             
@@ -770,13 +850,13 @@
             document.getElementById('statUsed').textContent = formatBytes(State.statistics.usedMemory);
             document.getElementById('statFrag').textContent = `${Math.round(State.statistics.fragmentation)}%`;
             document.getElementById('statOps').textContent = State.operations;
-            document.getElementById('statPerf').textContent = `${State.statistics.performance.toLocaleString()} ops/s`;
             
             // Calculate real-time performance
             const elapsed = (Date.now() - State.startTime) / 1000;
             if (elapsed > 0) {
                 const opsPerSec = Math.round(State.operations / elapsed);
                 document.getElementById('statPerf').textContent = `${opsPerSec.toLocaleString()} ops/s`;
+                State.statistics.performance = opsPerSec;
             }
         }
 
