@@ -63,6 +63,14 @@
             background: linear-gradient(45deg, #43e97b, #38f9d7);
         }
         
+        .status.simulation {
+            background: linear-gradient(45deg, #f39c12, #e67e22);
+        }
+        
+        .status.wasm-ready {
+            background: linear-gradient(45deg, #9b59b6, #8e44ad);
+        }
+        
         .status.error {
             background: linear-gradient(45deg, #ff416c, #ff4b2b);
         }
@@ -315,8 +323,8 @@
         <div class="header">
             <h1>🧠 Memory Allocator - WebAssembly</h1>
             <p>Custom Buddy & Slab allocators compiled from C to WebAssembly</p>
-            <div class="status loading" id="status">
-                ⚡ Initializing WebAssembly Runtime...
+            <div class="status simulation" id="status">
+                ⚡ Simulation Mode Active (WebAssembly loading in background...)
             </div>
         </div>
         
@@ -436,9 +444,7 @@
         </div>
     </div>
 
-    <!-- Load Emscripten JS FIRST -->
-    <script src="allocator_real.js"></script>
-    
+    <!-- Load Emscripten JS in background -->
     <script>
         // ==================== CONFIGURATION ====================
         const CONFIG = {
@@ -453,10 +459,11 @@
             }
         };
 
-        // ==================== STATE MANAGEMENT ====================
+        // ==================== GLOBAL STATE ====================
         const State = {
             wasm: null,
-            ready: false,
+            ready: true, // Start as ready (simulation mode)
+            isRealWasm: false, // Track if we're using real WebAssembly
             operations: 0,
             startTime: Date.now(),
             allocatedBlocks: [],
@@ -468,163 +475,114 @@
             }
         };
 
-        // ==================== SIMPLE & RELIABLE WEBASSEMBLY LOADING ====================
-        async function initializeWebAssembly() {
-            const status = document.getElementById('status');
+        // ==================== BACKGROUND WEBASSEMBLY LOADER ====================
+        function loadWebAssemblyInBackground() {
+            console.log('Starting background WebAssembly load...');
             
-            try {
-                status.textContent = '📦 Loading WebAssembly module...';
-                log('Loading WebAssembly...');
+            // Create a script element to load allocator_real.js
+            const script = document.createElement('script');
+            script.src = 'allocator_real.js';
+            script.async = true;
+            script.onload = () => {
+                console.log('allocator_real.js loaded, waiting for Module...');
+                waitForWasmModule();
+            };
+            script.onerror = () => {
+                console.log('Failed to load allocator_real.js');
+                log('❌ WebAssembly script failed to load (continuing with simulation)');
+            };
+            
+            document.head.appendChild(script);
+        }
+
+        function waitForWasmModule() {
+            let checkCount = 0;
+            const maxChecks = 50; // 5 seconds total
+            const checkInterval = 100; // Check every 100ms
+            
+            const checkModule = setInterval(() => {
+                checkCount++;
                 
-                // First, check if Module is defined by allocator_real.js
-                if (typeof Module === 'undefined') {
-                    throw new Error('Emscripten Module not loaded. Check if allocator_real.js is loaded.');
+                if (typeof Module !== 'undefined' && Module.asm) {
+                    clearInterval(checkModule);
+                    console.log('✅ WebAssembly Module loaded successfully!');
+                    log('🎉 REAL WebAssembly loaded in background!');
+                    switchToRealWasm();
+                } else if (checkCount >= maxChecks) {
+                    clearInterval(checkModule);
+                    console.log('❌ WebAssembly Module load timeout');
+                    log('⚠️ WebAssembly timed out (continuing with simulation)');
+                } else {
+                    console.log(`Waiting for Module... (attempt ${checkCount}/${maxChecks})`);
                 }
-                
-                // Wait for Module to be ready
-                await new Promise((resolve) => {
-                    // If already ready
-                    if (Module.asm) {
-                        log('Module already initialized');
-                        resolve();
-                        return;
-                    }
-                    
-                    // Set up callback
-                    if (Module.onRuntimeInitialized) {
-                        Module.onRuntimeInitialized = () => {
-                            log('Module.onRuntimeInitialized called');
-                            resolve();
-                        };
-                    } else {
-                        // Fallback: check every 100ms
-                        log('Waiting for Module initialization...');
-                        let checks = 0;
-                        const interval = setInterval(() => {
-                            checks++;
-                            if (Module.asm) {
-                                clearInterval(interval);
-                                log(`Module ready after ${checks * 100}ms`);
-                                resolve();
-                            } else if (checks > 50) { // 5 second timeout
-                                clearInterval(interval);
-                                reject(new Error('Module initialization timeout'));
-                            }
-                        }, 100);
-                    }
-                });
-                
-                log('✅ Emscripten Module is ready!');
-                log(`Module exports: ${Object.keys(Module).filter(k => k.startsWith('_')).join(', ')}`);
-                
-                // Create simple wrapper functions
+            }, checkInterval);
+        }
+
+        function switchToRealWasm() {
+            try {
+                // Create wrapper for real WebAssembly functions
                 State.wasm = {
                     _wasm_init_allocator: (type, size) => {
-                        if (Module._wasm_init_allocator) {
-                            return Module._wasm_init_allocator(type, size);
-                        }
-                        log('WARNING: _wasm_init_allocator not found in Module');
+                        if (Module._wasm_init_allocator) return Module._wasm_init_allocator(type, size);
                         return 0;
                     },
                     _wasm_malloc: (size) => {
-                        if (Module._wasm_malloc) {
-                            return Module._wasm_malloc(size);
-                        }
-                        log('WARNING: _wasm_malloc not found in Module');
+                        if (Module._wasm_malloc) return Module._wasm_malloc(size);
                         return 0;
                     },
                     _wasm_free: (ptr) => {
-                        if (Module._wasm_free) {
-                            Module._wasm_free(ptr);
-                        } else {
-                            log('WARNING: _wasm_free not found in Module');
-                        }
+                        if (Module._wasm_free) Module._wasm_free(ptr);
                     },
                     _wasm_get_used_memory: () => {
-                        if (Module._wasm_get_used_memory) {
-                            return Module._wasm_get_used_memory();
-                        }
-                        log('WARNING: _wasm_get_used_memory not found in Module');
+                        if (Module._wasm_get_used_memory) return Module._wasm_get_used_memory();
                         return 0;
                     },
                     _wasm_get_fragmentation: () => {
-                        if (Module._wasm_get_fragmentation) {
-                            return Module._wasm_get_fragmentation();
-                        }
-                        log('WARNING: _wasm_get_fragmentation not found in Module');
+                        if (Module._wasm_get_fragmentation) return Module._wasm_get_fragmentation();
                         return 0;
                     },
                     _wasm_cleanup: () => {
-                        if (Module._wasm_cleanup) {
-                            Module._wasm_cleanup();
-                        } else {
-                            log('WARNING: _wasm_cleanup not found in Module');
-                        }
+                        if (Module._wasm_cleanup) Module._wasm_cleanup();
                     },
                     _wasm_test_allocator: () => {
-                        if (Module._wasm_test_allocator) {
-                            return Module._wasm_test_allocator();
-                        }
-                        log('WARNING: _wasm_test_allocator not found in Module');
+                        if (Module._wasm_test_allocator) return Module._wasm_test_allocator();
                         return 0;
                     },
                     _wasm_benchmark: (iterations) => {
-                        if (Module._wasm_benchmark) {
-                            return Module._wasm_benchmark(iterations);
-                        }
-                        log('WARNING: _wasm_benchmark not found in Module');
+                        if (Module._wasm_benchmark) return Module._wasm_benchmark(iterations);
                         return 0;
                     }
                 };
                 
-                // Check if any functions were found
-                const foundFuncs = Object.keys(State.wasm).filter(k => {
-                    const funcName = k.replace('_wasm_', '_');
-                    return Module[funcName] !== undefined;
-                });
+                State.isRealWasm = true;
+                document.getElementById('status').className = 'status wasm-ready';
+                document.getElementById('status').textContent = '✅ REAL WebAssembly Now Active!';
                 
-                if (foundFuncs.length > 0) {
-                    status.className = 'status ready';
-                    status.textContent = '✅ REAL WebAssembly Loaded!';
-                    State.ready = true;
-                    
-                    log(`✅ WebAssembly initialized with ${foundFuncs.length} functions`);
-                    log('🎉 This is REAL C code running in your browser!');
-                    
-                    // Run a quick test
-                    setTimeout(() => {
-                        if (State.wasm._wasm_test_allocator) {
-                            try {
-                                const testResult = State.wasm._wasm_test_allocator();
-                                log(`Initial test: ${testResult ? 'PASSED ✓ (Real C Code)' : 'FAILED ✗'}`);
-                            } catch (e) {
-                                log(`Test error: ${e.message}`);
-                            }
-                        }
-                    }, 100);
-                    
-                    updateStatistics();
-                    setupEventListeners();
-                    
-                } else {
-                    throw new Error('No WebAssembly functions found in Module');
+                log('✨ Switched to REAL WebAssembly mode!');
+                log('🎯 Your C code is now running in the browser!');
+                
+                // Test the real allocator
+                if (State.wasm._wasm_test_allocator) {
+                    try {
+                        const result = State.wasm._wasm_test_allocator();
+                        log(`WebAssembly test: ${result ? 'PASSED ✓' : 'FAILED ✗'}`);
+                    } catch (e) {
+                        log(`WebAssembly test error: ${e.message}`);
+                    }
                 }
                 
             } catch (error) {
-                console.error('WebAssembly initialization failed:', error);
-                status.className = 'status error';
-                status.textContent = '❌ WebAssembly Failed - Using Simulation';
-                log(`Error: ${error.message}`);
-                
-                // Fallback to simulation mode
-                setTimeout(() => fallbackToSimulation(), 100);
+                console.error('Error switching to WebAssembly:', error);
+                log(`Failed to switch to WebAssembly: ${error.message}`);
             }
         }
 
-        function fallbackToSimulation() {
-            log('⚠️ Using simulation mode (WebAssembly not available)');
+        // ==================== SIMULATION MODE FUNCTIONS ====================
+        function initializeSimulationMode() {
+            log('🚀 Starting in Simulation Mode...');
+            log('WebAssembly loading in background...');
             
-            // Mock WebAssembly functions for simulation
+            // Simulation mode functions
             State.wasm = {
                 _wasm_init_allocator: () => {
                     log('SIMULATION: Initialized allocator');
@@ -632,13 +590,13 @@
                 },
                 _wasm_malloc: (size) => {
                     State.statistics.usedMemory += size;
-                    const ptr = Math.random() * 1000000;
-                    log(`SIMULATION: Allocated ${formatBytes(size)}`);
+                    const ptr = Math.floor(Math.random() * 1000000);
+                    log(`SIMULATION: Allocated ${formatBytes(size)} at 0x${ptr.toString(16)}`);
                     return ptr;
                 },
                 _wasm_free: (ptr) => {
                     State.statistics.usedMemory = Math.max(0, State.statistics.usedMemory - 100);
-                    log(`SIMULATION: Freed pointer`);
+                    log(`SIMULATION: Freed pointer 0x${ptr.toString(16)}`);
                 },
                 _wasm_get_used_memory: () => State.statistics.usedMemory,
                 _wasm_get_fragmentation: () => {
@@ -661,9 +619,8 @@
                 }
             };
             
-            State.ready = true;
-            document.getElementById('status').className = 'status ready';
-            document.getElementById('status').textContent = '✅ Simulation Mode Active';
+            document.getElementById('status').className = 'status simulation';
+            document.getElementById('status').textContent = '⚡ Simulation Mode Active (WebAssembly loading in background...)';
             
             updateStatistics();
             setupEventListeners();
@@ -680,7 +637,7 @@
                 const result = State.wasm._wasm_init_allocator(parseInt(type), State.heapSize);
                 
                 if (result) {
-                    log(`✅ ${allocatorName} allocator initialized with ${formatBytes(State.heapSize)}`);
+                    log(`${State.isRealWasm ? '✅' : '🎮'} ${allocatorName} allocator initialized with ${formatBytes(State.heapSize)}`);
                     State.allocatedBlocks = [];
                     visualizeHeap();
                 } else {
@@ -703,7 +660,7 @@
                 
                 if (pointer) {
                     State.allocatedBlocks.push({ id: blockId, size, pointer });
-                    log(`📝 Allocated ${formatBytes(size)} (Block ${blockId})`);
+                    log(`${State.isRealWasm ? '📝' : '🎮'} Allocated ${formatBytes(size)} (Block ${blockId})`);
                     
                     if (State.wasm._wasm_get_used_memory) {
                         State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
@@ -731,7 +688,7 @@
                 State.wasm._wasm_free(block.pointer);
                 State.allocatedBlocks.splice(randomIndex, 1);
                 
-                log(`🗑️ Freed Block ${block.id} (${formatBytes(block.size)})`);
+                log(`${State.isRealWasm ? '🗑️' : '🎮'} Freed Block ${block.id} (${formatBytes(block.size)})`);
                 
                 if (State.wasm._wasm_get_used_memory) {
                     State.statistics.usedMemory = State.wasm._wasm_get_used_memory();
@@ -751,7 +708,7 @@
                 State.allocatedBlocks = [];
                 State.statistics.usedMemory = 0;
                 
-                log('🧹 Allocator cleaned up');
+                log(`${State.isRealWasm ? '🧹' : '🎮'} Allocator cleaned up`);
                 visualizeHeap();
                 State.operations++;
                 updateStatistics();
@@ -762,11 +719,11 @@
         function runTest(testType) {
             if (!State.ready) return;
             
-            log(`🧪 Running ${testType} test...`);
+            log(`${State.isRealWasm ? '🧪' : '🎮'} Running ${testType} test...`);
             
             if (State.wasm._wasm_test_allocator) {
                 const result = State.wasm._wasm_test_allocator();
-                log(`Test result: ${result ? 'PASSED ✓' : 'FAILED ✗'}`);
+                log(`${State.isRealWasm ? '✅' : '🎮'} Test result: ${result ? 'PASSED ✓' : 'FAILED ✗'}`);
                 State.operations++;
                 updateStatistics();
             }
@@ -775,7 +732,7 @@
         function runBenchmark(iterations) {
             if (!State.ready) return;
             
-            log(`⏱️ Starting benchmark (${iterations} operations)...`);
+            log(`${State.isRealWasm ? '⏱️' : '🎮'} Starting benchmark (${iterations} operations)...`);
             const startTime = performance.now();
             
             if (State.wasm._wasm_benchmark) {
@@ -785,7 +742,7 @@
                 const opsPerSec = Math.round((iterations / duration) * 1000);
                 
                 State.statistics.performance = opsPerSec;
-                log(`📊 Benchmark: ${success}/${iterations} successful (${opsPerSec.toLocaleString()} ops/sec)`);
+                log(`${State.isRealWasm ? '📊' : '🎮'} Benchmark: ${success}/${iterations} successful (${opsPerSec.toLocaleString()} ops/sec)`);
                 
             } else {
                 // JavaScript benchmark fallback
@@ -797,7 +754,7 @@
                 const opsPerSec = Math.round((iterations / duration) * 1000);
                 
                 State.statistics.performance = opsPerSec;
-                log(`📊 JavaScript benchmark: ${opsPerSec.toLocaleString()} ops/sec`);
+                log(`🎮 JavaScript benchmark: ${opsPerSec.toLocaleString()} ops/sec`);
             }
             
             State.operations += iterations;
@@ -819,14 +776,17 @@
             // Allocated blocks
             for (let i = 0; i < allocatedCount; i++) {
                 const block = State.allocatedBlocks[i];
-                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.allocated, 
-                                 'A', `Allocated: ${formatBytes(block.size)}`);
+                const color = State.isRealWasm ? CONFIG.visualization.colors.allocated : '#f39c12';
+                createMemoryBlock(position, blockWidth, color, 
+                                 State.isRealWasm ? 'A' : 'S', 
+                                 `${State.isRealWasm ? 'Allocated' : 'Simulated'}: ${formatBytes(block.size)}`);
                 position += blockWidth;
             }
             
             // Free blocks
             for (let i = 0; i < freeCount; i++) {
-                createMemoryBlock(position, blockWidth, CONFIG.visualization.colors.free, 
+                const color = State.isRealWasm ? CONFIG.visualization.colors.free : '#95a5a6';
+                createMemoryBlock(position, blockWidth, color, 
                                  'F', `Free Space`);
                 position += blockWidth;
             }
@@ -901,16 +861,18 @@
         }
 
         // ==================== INITIALIZATION ====================
-        // Wait for the Emscripten script to load first
         document.addEventListener('DOMContentLoaded', () => {
             log('🚀 Memory Allocator Demo Initializing');
-            log('WebAssembly compilation: COMPLETE ✓');
-            log('Visualization engine: READY ✓');
+            log('Starting simulation mode immediately...');
+            log('WebAssembly will load in background...');
             
-            // Start WebAssembly initialization after a short delay
+            // Start in simulation mode immediately
+            initializeSimulationMode();
+            
+            // Start background WebAssembly loading
             setTimeout(() => {
-                initializeWebAssembly();
-            }, 100);
+                loadWebAssemblyInBackground();
+            }, 500);
             
             // Initial stats update
             updateStatistics();
